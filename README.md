@@ -1,5 +1,61 @@
 # Scraper Microservices
 
+## Testing Price Drop Notifications
+
+To test the price drop notification feature, follow these steps:
+
+1. **Prerequisites**:
+   - Ensure all services are running (`docker compose up`)
+   - Configure email settings in `.env` file
+   - Have a user account with favorite products
+
+2. **Add a Product to Favorites**:
+   ```sql
+   -- Run this in the PostgreSQL container
+   docker exec -it scraper-postgres-1 psql -U postgres -d scraper
+   -- Replace user_id and product_id with actual values
+   INSERT INTO user_favorites (user_id, product_id) VALUES (your_user_id, product_id);
+   ```
+
+3. **Simulate Price Drop**:
+   ```bash
+   # Replace product_id and new_price with your values
+   curl -X POST http://localhost:8080/simulate-price-drop \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "product_id": your_product_id,
+       "new_price": new_price_value
+     }'
+   ```
+
+4. **Verify Notification**:
+   - Check your email inbox (and spam folder) for the price drop notification
+   - The email subject will be: "Price Drop Alert! [Product Name] is now cheaper"
+   - The email will contain the old and new prices
+
+5. **Monitor Logs**:
+   ```bash
+   # View application logs
+   docker compose logs -f
+   ```
+
+Example Flow:
+```bash
+# 1. Add product to user's favorites
+docker exec -it scraper-postgres-1 psql -U postgres -d scraper -c \
+  "INSERT INTO user_favorites (user_id, product_id) VALUES (3, 169048650);"
+
+# 2. Simulate a price drop from 50.00 to 45.00
+curl -X POST http://localhost:8080/simulate-price-drop \
+  -H 'Content-Type: application/json' \
+  -d '{"product_id": 169048650, "new_price": 45.00}'
+
+# 3. Check logs for notification status
+docker compose logs -f | grep "notification"
+```
+
+## Overview
+
 A scalable microservices-based backend for fetching, analyzing, and notifying users about product updates from Trendyol. The system uses a microservices architecture with Kafka for message queuing and PostgreSQL for data storage.
 
 ## Architecture

@@ -37,111 +37,45 @@ func handleFavorites(db *gorm.DB, producer sarama.SyncProducer) func([]byte) {
 		defer conn.Close()
 		notificationClient := proto.NewNotificationServiceClient(conn)
 
-		var products []models.Product
-		if err := json.Unmarshal(data, &products); err != nil {
-			logrus.WithError(err).Error("Error unmarshaling favorited products")
+		var priceUpdate struct {
+			UserID    uint    `json:"user_id"`
+			ProductID uint    `json:"product_id"`
+			OldPrice  float64 `json:"old_price"`
+			NewPrice  float64 `json:"new_price"`
+		}
+		if err := json.Unmarshal(data, &priceUpdate); err != nil {
+			logrus.WithError(err).Error("Error unmarshaling price update")
 			return
 		}
 
-		for _, updatedProduct := range products {
-			var existingProduct models.Product
-			if err := db.First(&existingProduct, updatedProduct.ID).Error; err != nil {
-				logrus.WithError(err).WithField("product_id", updatedProduct.ID).Error("Error finding existing product")
-				continue
-			}
+		// Get product details
+		var product models.Product
+		if err := db.First(&product, priceUpdate.ProductID).Error; err != nil {
+			logrus.WithError(err).Error("Failed to find product")
+			return
+		}
 
-			logrus.WithFields(logrus.Fields{
-				"name": existingProduct.Name,
-				"id":   existingProduct.ID,
-			}).Info("Priority update for product")
+		// Send notification to user
+		_, err = notificationClient.SendNotification(context.Background(), &proto.NotificationRequest{
+			UserId:    fmt.Sprintf("%d", priceUpdate.UserID),
+			ProductId: uint32(priceUpdate.ProductID),
+			Message:   fmt.Sprintf("Price dropped from %.2f to %.2f for %s", priceUpdate.OldPrice, priceUpdate.NewPrice, product.Name),
+		})
+		if err != nil {
+			logrus.WithError(err).Error("Failed to send notification")
+			return
+		}
 
-			var oldPriceInfo, newPriceInfo map[string]interface{}
-			var oldStockInfo, newStockInfo map[string]interface{}
+		// Record price history
+		priceLog := models.PriceStockLog{
+			ProductID:  priceUpdate.ProductID,
+			OldPrice:   fmt.Sprintf("%.2f", priceUpdate.OldPrice),
+			NewPrice:   fmt.Sprintf("%.2f", priceUpdate.NewPrice),
+			ChangeTime: time.Now(),
+		}
 
-			if err := json.Unmarshal(existingProduct.PriceInfo, &oldPriceInfo); err != nil {
-				logrus.WithError(err).Error("Error unmarshaling old price")
-				continue
-			}
-			if err := json.Unmarshal(updatedProduct.PriceInfo, &newPriceInfo); err != nil {
-				logrus.WithError(err).Error("Error unmarshaling new price")
-				continue
-			}
-			if err := json.Unmarshal(existingProduct.StockInfo, &oldStockInfo); err != nil {
-				logrus.WithError(err).Error("Error unmarshaling old stock")
-				continue
-			}
-			if err := json.Unmarshal(updatedProduct.StockInfo, &newStockInfo); err != nil {
-				logrus.WithError(err).Error("Error unmarshaling new stock")
-				continue
-			}
-
-			oldPrice, oldPriceOk := oldPriceInfo["originalPrice"].(float64)
-			newPrice, newPriceOk := newPriceInfo["originalPrice"].(float64)
-			oldStock, oldStockOk := oldStockInfo["stock"].(float64)
-			newStock, newStockOk := newStockInfo["stock"].(float64)
-
-			if !oldPriceOk || !newPriceOk || !oldStockOk || !newStockOk {
-				logrus.Error("Could not extract price or stock values as float64")
-				continue
-			}
-
-			if oldPrice != newPrice || oldStock != newStock {
-				logrus.WithFields(logrus.Fields{
-					"old_price": oldPrice,
-					"new_price": newPrice,
-					"old_stock": oldStock,
-					"new_stock": newStock,
-				}).Info("Change detected")
-
-				priceLog := models.PriceStockLog{
-					ProductID:  existingProduct.ID,
-					OldPrice:   fmt.Sprintf("%.2f", oldPrice),
-					NewPrice:   fmt.Sprintf("%.2f", newPrice),
-					OldStock:   fmt.Sprintf("%.0f", oldStock),
-					NewStock:   fmt.Sprintf("%.0f", newStock),
-					ChangeTime: time.Now(),
-				}
-				db.Create(&priceLog)
-
-				db.Model(&existingProduct).Updates(map[string]interface{}{
-					"price_info": updatedProduct.PriceInfo,
-					"stock_info": updatedProduct.StockInfo,
-				})
-
-				if newPrice < oldPrice {
-					logrus.WithField("name", existingProduct.Name).Info("Price drop detected")
-
-					var favorites []models.UserFavorite
-					if err := db.Where("product_id = ?", existingProduct.ID).Find(&favorites).Error; err != nil {
-						logrus.WithError(err).WithField("product_id", existingProduct.ID).Error("Error finding favorites")
-						continue
-					}
-
-					logrus.WithField("count", len(favorites)).Info("Found users to notify")
-					for _, favorite := range favorites {
-						var user models.User
-						if err := db.First(&user, favorite.UserID).Error; err != nil {
-							logrus.WithError(err).WithField("user_id", favorite.UserID).Error("Error finding user")
-							continue
-						}
-
-						logrus.WithField("email", user.Email).Info("Sending notification about price drop")
-						_, err := notificationClient.SendNotification(context.Background(),
-							&proto.NotificationRequest{
-								UserId:    fmt.Sprintf("%d", user.ID),
-								ProductId: uint32(existingProduct.ID),
-								Message:   fmt.Sprintf("Price dropped from %.2f to %.2f for %s!", oldPrice, newPrice, existingProduct.Name),
-							})
-						if err != nil {
-							logrus.WithError(err).Error("Error sending notification")
-						} else {
-							logrus.WithField("user_id", user.ID).Info("Successfully sent notification")
-						}
-					}
-				}
-			} else {
-				logrus.WithField("name", existingProduct.Name).Info("No changes detected")
-			}
+		if err := db.Create(&priceLog).Error; err != nil {
+			logrus.WithError(err).Error("Failed to create price log")
 		}
 	}
 }

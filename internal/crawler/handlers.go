@@ -16,10 +16,68 @@ import (
 	"scraper/internal/models"
 
 	"github.com/sirupsen/logrus"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
 func registerHandlers(e *echo.Echo, db *gorm.DB, producer sarama.SyncProducer) {
+	e.POST("/simulate-price-drop", func(c echo.Context) error {
+		var req struct {
+			ProductID uint    `json:"product_id"`
+			NewPrice  float64 `json:"new_price"`
+		}
+		if err := c.Bind(&req); err != nil {
+			logrus.WithError(err).Error("Invalid price drop simulation request")
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+		}
+
+		// Get current price
+		var product models.Product
+		if err := db.First(&product, req.ProductID).Error; err != nil {
+			logrus.WithError(err).Error("Failed to find product")
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Product not found"})
+		}
+
+		oldPrice := product.Price
+		
+		// Update price
+		product.Price = req.NewPrice
+		priceInfo := fmt.Sprintf(`{"currency": "TRY", "original": %f}`, req.NewPrice)
+		product.PriceInfo = datatypes.JSON([]byte(priceInfo))
+		if err := db.Save(&product).Error; err != nil {
+			logrus.WithError(err).Error("Failed to update product price")
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update price"})
+		}
+
+		// Record price history
+		if err := db.Exec("INSERT INTO price_history (product_id, old_price, new_price) VALUES (?, ?, ?)", 
+			req.ProductID, oldPrice, req.NewPrice).Error; err != nil {
+			logrus.WithError(err).Error("Failed to record price history")
+		}
+
+		// Get users who have favorited this product
+		var favorites []models.UserFavorite
+		if err := db.Where("product_id = ?", req.ProductID).Find(&favorites).Error; err != nil {
+			logrus.WithError(err).Error("Failed to find favorites")
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to find favorites"})
+		}
+
+		// Send notifications
+		for _, fav := range favorites {
+			msg := &sarama.ProducerMessage{
+				Topic: "FAVORITE_PRODUCTS",
+				Key:   sarama.StringEncoder(fmt.Sprintf("%d", fav.UserID)),
+				Value: sarama.StringEncoder(fmt.Sprintf(`{"user_id":%d,"product_id":%d,"old_price":%f,"new_price":%f}`, 
+					fav.UserID, req.ProductID, oldPrice, req.NewPrice)),
+			}
+			_, _, err := producer.SendMessage(msg)
+			if err != nil {
+				logrus.WithError(err).Error("Failed to send notification message")
+			}
+		}
+
+		return c.JSON(http.StatusOK, map[string]string{"status": "Price updated and notifications sent"})
+	})
 	validate := validator.New()
 
 	e.GET("/fetch", func(c echo.Context) error {

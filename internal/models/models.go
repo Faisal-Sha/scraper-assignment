@@ -97,6 +97,14 @@ type User struct {
 	LastLoginAt time.Time
 }
 
+type Favorite struct {
+	gorm.Model
+	UserID    uint
+	ProductID uint
+	User      User    `gorm:"foreignKey:UserID"`
+	Product   Product `gorm:"foreignKey:ProductID"`
+}
+
 type UserFavorite struct {
 	gorm.Model
 	UserID    uint `gorm:"index:idx_user_product,unique"`
@@ -129,6 +137,7 @@ type Product struct {
 	OtherSellers       datatypes.JSON `gorm:"type:jsonb"`
 	IsActive           bool           `gorm:"default:true"`
 	IsFavorite         bool           `gorm:"default:false"`
+	Price              float64        `gorm:"type:decimal(10,2)"`
 }
 
 type TrendyolResponse struct {
