@@ -1,36 +1,71 @@
+// Package analysis implements the product analysis service that processes and categorizes products
 package analysis
 
 import (
 	"encoding/json"
+
 	"github.com/IBM/sarama"
-	"gorm.io/gorm"
-	"scraper/internal/models"
 	"github.com/sirupsen/logrus"
+	"gorm.io/gorm"
+
+	"scraper/internal/models"
 )
 
+// handleProducts creates a message handler for processing product updates.
+// It analyzes incoming product data and determines whether products are:
+// 1. New products to be created
+// 2. Existing products that need updates
+// 3. Favorited products that need special handling
+// 4. Out-of-stock products that should be marked inactive
+//
+// The handler performs the following steps for each product:
+// 1. Checks if the product exists in the database
+// 2. For new products:
+//   - Creates them in the database
+//   - Checks if they are favorited by any users
+// 3. For existing products:
+//   - Checks stock status and marks inactive if out of stock
+//   - Identifies if product is favorited and needs special handling
+//   - Updates product details in the database
+//
+// Parameters:
+//   - db: Database connection for product operations
+//   - producer: Kafka producer for sending updates about favorited products
+//
+// Returns:
+//   - func([]byte): Message handler function that processes product data
 func handleProducts(db *gorm.DB, producer sarama.SyncProducer) func([]byte) {
 	return func(data []byte) {
 		logrus.Info("Product Analysis Service received product data")
+
+		// Unmarshal incoming product data
 		var products []models.Product
 		if err := json.Unmarshal(data, &products); err != nil {
 			logrus.WithError(err).Error("Error unmarshaling products")
 			return
 		}
 		logrus.WithField("data", string(data)).Info("Received product data")
+
+		// Track products that are favorited for special handling
 		var favoritedProducts []models.Product
 
+		// Process each product
 		for _, p := range products {
 			var existing models.Product
 			result := db.First(&existing, p.ID)
 
+			// Handle new products
 			if result.Error != nil {
 				if result.Error == gorm.ErrRecordNotFound {
 					logrus.WithFields(logrus.Fields{
 						"name": p.Name,
 						"id":   p.ID,
 					}).Info("New product detected")
+
+					// Create new product
 					db.Create(&p)
 
+					// Check if new product is favorited
 					var favoriteCount int64
 					db.Model(&models.UserFavorite{}).Where("product_id = ?", p.ID).Count(&favoriteCount)
 					if favoriteCount > 0 && p.IsActive && p.IsFavorite {
@@ -40,11 +75,13 @@ func handleProducts(db *gorm.DB, producer sarama.SyncProducer) func([]byte) {
 					logrus.WithError(result.Error).Error("Error checking existing product")
 				}
 			} else {
+				// Handle existing products
 				logrus.WithFields(logrus.Fields{
 					"name": p.Name,
 					"id":   p.ID,
 				}).Info("Existing product detected")
 
+				// Check stock status
 				var stockInfo map[string]interface{}
 				if err := json.Unmarshal(p.StockInfo, &stockInfo); err == nil {
 					if stock, ok := stockInfo["stock"].(float64); ok && stock == 0 {
@@ -56,6 +93,7 @@ func handleProducts(db *gorm.DB, producer sarama.SyncProducer) func([]byte) {
 					}
 				}
 
+				// Check if product is favorited
 				isFavorited := false
 				if p.IsFavorite && p.IsActive {
 					var favoriteCount int64
@@ -70,6 +108,7 @@ func handleProducts(db *gorm.DB, producer sarama.SyncProducer) func([]byte) {
 					}
 				}
 
+				// Update regular products
 				if !isFavorited {
 					logrus.WithFields(logrus.Fields{
 						"name": p.Name,
