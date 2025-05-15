@@ -47,7 +47,7 @@ func Setup() *gorm.DB {
 	db.Model(&models.User{}).Count(&count)
 	if count == 0 {
 		db.Create(&models.User{
-			Email:    "usmaaslam187@gmail.com",
+			Email:    "faisal712000@gmail.com",
 			Username: "admin",
 			Password: "admin123", // TODO: Hash in production
 			Name:     "Admin User",
