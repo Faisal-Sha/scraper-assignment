@@ -1,19 +1,37 @@
+// Specify Protocol Buffers version 3
 syntax = "proto3";
 
+// Define package name for protocol buffer messages
 package proto;
 
+// Specify the Go package path for the generated code
 option go_package = "scraper/internal/proto";
 
+// NotificationService defines the gRPC service for sending notifications
+// to users about price drops and other product updates.
 service NotificationService {
+    // SendNotification sends a notification to a specific user about a product.
+    // It takes a NotificationRequest containing user ID, product ID, and message,
+    // and returns a NotificationResponse indicating success or failure.
     rpc SendNotification (NotificationRequest) returns (NotificationResponse);
 }
 
+// NotificationRequest represents a request to send a notification.
+// Used when a price drop or other important product update occurs.
 message NotificationRequest {
+    // ID of the user to notify
     string user_id = 1;
+    
+    // ID of the product that triggered the notification
     uint32 product_id = 2;
+    
+    // Message content to send to the user
+    // For price drops, format: "Price dropped from X to Y for Product Z"
     string message = 3;
 }
 
+// NotificationResponse represents the result of a notification attempt.
 message NotificationResponse {
+    // Whether the notification was sent successfully
     bool success = 1;
 }
