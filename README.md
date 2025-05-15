@@ -104,6 +104,103 @@ GET /health: Health check for analysis and favorites services.
    ```bash
    go run cmd/notification/main.go
    ```
-7. Run the tests:
+## Testing Steps
+
+1. Unit Tests:
    ```bash
+   # Run all unit tests
    go test ./...
+
+   # Run tests with coverage
+   go test -cover ./...
+   ```
+
+2. Integration Testing:
+   ```bash
+   # Run integration tests
+   cd tests && go test -v
+   ```
+
+3. Manual Testing Flow:
+
+   a. Start Required Services:
+   ```bash
+   # Start PostgreSQL and Kafka
+   docker compose up -d postgres kafka
+   
+   # Wait for services to be ready
+   sleep 10
+   ```
+
+   b. Test Crawler Service:
+   ```bash
+   # Start crawler service
+   go run cmd/crawler/main.go
+   
+   # Verify product fetching
+   curl http://localhost:8080/fetch
+   ```
+
+   c. Test Product Analysis Service:
+   ```bash
+   # Start product analysis service
+   go run cmd/product-analysis/main.go
+   
+   # Check Kafka topic for product updates
+   kafka-console-consumer --bootstrap-server localhost:9092 --topic product-updates
+   ```
+
+   d. Test Favorites Service:
+   ```bash
+   # Start favorites service
+   go run cmd/favorites/main.go
+   
+   # Add a product to favorites
+   curl -X POST http://localhost:8082/favorites -d '{"user_id": 1, "product_id": "123"}'
+   ```
+
+   e. Test Notification Service:
+   ```bash
+   # Start notification service
+   go run cmd/notification/main.go
+   
+   # Monitor notification logs
+   tail -f logs/notification.log
+   ```
+
+4. End-to-End Test Flow:
+
+   a. Create a new user
+   ```bash
+   curl -X POST http://localhost:8080/users -d '{"email": "test@example.com"}'
+   ```
+
+   b. Add products to favorites
+   ```bash
+   curl -X POST http://localhost:8080/favorites -d '{"user_id": 1, "product_id": "123"}'
+   ```
+
+   c. Verify product updates
+   ```bash
+   # Check favorite products
+   curl http://localhost:8080/favorites/1
+   
+   # Monitor price updates
+   kafka-console-consumer --bootstrap-server localhost:9092 --topic price-updates
+   ```
+
+5. Verification Points:
+   - Check database for product entries
+   - Verify Kafka topics have messages
+   - Confirm email notifications are sent
+   - Monitor service logs for errors
+   - Check price update history in database
+
+6. Performance Testing:
+   ```bash
+   # Run benchmarks
+   go test -bench=. ./...
+   
+   # Test crawler with multiple concurrent requests
+   ab -n 1000 -c 10 http://localhost:8080/fetch
+   ```

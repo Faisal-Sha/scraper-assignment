@@ -18,6 +18,8 @@ func SetupProducer() sarama.SyncProducer {
 
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
+	// Increase max message size to 5MB
+	config.Producer.MaxMessageBytes = 5 * 1024 * 1024
 	producer, err := sarama.NewSyncProducer(brokers, config)
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to create Kafka producer")

@@ -97,19 +97,41 @@ func registerHandlers(e *echo.Echo, db *gorm.DB, producer sarama.SyncProducer) {
 			logrus.WithError(err).Error("Failed to read mock data")
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to read mock data: %v", err)})
 		}
-		productsJSON, err := json.Marshal(mockProducts)
-		if err != nil {
-			logrus.WithError(err).Error("Failed to marshal products")
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to marshal products"})
-		}
-
-		msg := &sarama.ProducerMessage{
-			Topic: "PRODUCTS",
-			Value: sarama.ByteEncoder(productsJSON),
-		}
-		if _, _, err := producer.SendMessage(msg); err != nil {
-			logrus.WithError(err).Error("Failed to send message to Kafka")
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to send message to Kafka"})
+		// Split products into batches of 50
+		batchSize := 50
+		totalProducts := len(mockProducts)
+		
+		for i := 0; i < totalProducts; i += batchSize {
+			end := i + batchSize
+			if end > totalProducts {
+				end = totalProducts
+			}
+			
+			batch := mockProducts[i:end]
+			productsJSON, err := json.Marshal(batch)
+			if err != nil {
+				logrus.WithError(err).Error("Failed to marshal products batch")
+				continue
+			}
+			
+			msg := &sarama.ProducerMessage{
+				Topic: "PRODUCTS",
+				Value: sarama.ByteEncoder(productsJSON),
+			}
+			
+			if _, _, err := producer.SendMessage(msg); err != nil {
+				logrus.WithError(err).WithField("batch_start", i).WithField("batch_end", end).Error("Failed to send batch to Kafka")
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to send message to Kafka"})
+			}
+			
+			logrus.WithFields(logrus.Fields{
+				"batch_start": i,
+				"batch_end":   end,
+				"batch_size":  len(batch),
+			}).Info("Batch sent to Kafka")
+			
+			// Add a small delay between batches
+			time.Sleep(500 * time.Millisecond)
 		}
 
 		logrus.Info("Products fetched and sent to Kafka")
